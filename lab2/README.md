@@ -6,7 +6,7 @@ Qt desktop application for reading metadata from JPG, GIF, TIFF, BMP, PNG and PC
 
 Windows version:
 
-[Download ImageMetadataReader v1.0.0](PASTE_GITHUB_RELEASE_LINK_HERE)
+[Download ImageMetadataReader v1.0.0](https://github.com/B3RL1NN3R/PKG/releases/tag/ImageMetadataReader)
 
 ## Features
 
