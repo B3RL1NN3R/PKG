@@ -13,6 +13,8 @@
 
 namespace
 {
+constexpr double WindowsDefaultDpi = 96.0;
+
 quint16 readLe16(const char* data)
 {
     return static_cast<quint16>(static_cast<unsigned char>(data[0])) |
@@ -70,6 +72,20 @@ void setCorrupted(ImageMetadata& metadata, const QString& text)
     metadata.state = MetadataState::Corrupted;
     metadata.statusText = "Файл поврежден";
     appendDetail(metadata, text);
+}
+
+void applyWindowsDefaults(ImageMetadata& metadata)
+{
+    if (metadata.state == MetadataState::Corrupted)
+        return;
+
+    if (metadata.dpiX <= 0.0 || metadata.dpiY <= 0.0)
+    {
+        metadata.dpiX = WindowsDefaultDpi;
+        metadata.dpiY = WindowsDefaultDpi;
+        metadata.windowsDefaultDpi = true;
+        appendDetail(metadata, "Физическое разрешение отсутствует в файле: используется значение Windows по умолчанию 96 dpi");
+    }
 }
 
 QString expectedFormatForSuffix(const QString& suffix)
@@ -420,17 +436,17 @@ bool parseJpeg(QFile& file, ImageMetadata& metadata)
         return false;
     }
 
-    if (jfifDpiX > 0.0 && jfifDpiY > 0.0)
-    {
-        metadata.dpiX = jfifDpiX;
-        metadata.dpiY = jfifDpiY;
-        appendDetail(metadata, "Разрешение из JFIF");
-    }
-    else if (exifDpiX > 0.0 && exifDpiY > 0.0)
+    if (exifDpiX > 0.0 && exifDpiY > 0.0)
     {
         metadata.dpiX = exifDpiX;
         metadata.dpiY = exifDpiY;
         appendDetail(metadata, "Разрешение из EXIF IFD0");
+    }
+    else if (jfifDpiX > 0.0 && jfifDpiY > 0.0)
+    {
+        metadata.dpiX = jfifDpiX;
+        metadata.dpiY = jfifDpiY;
+        appendDetail(metadata, "Разрешение из JFIF");
     }
 
     appendDetail(metadata, QString("Компонентов: %1; точность: %2 бит/компонент")
@@ -753,6 +769,12 @@ bool parseBmp(QFile& file, ImageMetadata& metadata)
         metadata.width = width;
         metadata.height = std::abs(height);
         metadata.compression = bmpCompressionName(compression);
+        if ((compression == 1 && bpp != 8) || (compression == 2 && bpp != 4) ||
+            (height < 0 && compression != 0 && compression != 3 && compression != 6))
+        {
+            setCorrupted(metadata, "Несовместимые параметры глубины цвета и сжатия BMP");
+            return false;
+        }
         if (xPpm != 0 && yPpm != 0)
         {
             metadata.dpiX = std::abs(xPpm) * 0.0254;
@@ -908,6 +930,18 @@ bool parseGif(QFile& file, ImageMetadata& metadata)
                 return false;
             }
 
+            const quint16 imageLeft = readLe16(descriptor.constData());
+            const quint16 imageTop = readLe16(descriptor.constData() + 2);
+            const quint16 imageWidth = readLe16(descriptor.constData() + 4);
+            const quint16 imageHeight = readLe16(descriptor.constData() + 6);
+            if (imageWidth == 0 || imageHeight == 0 ||
+                static_cast<quint32>(imageLeft) + imageWidth > static_cast<quint32>(metadata.width) ||
+                static_cast<quint32>(imageTop) + imageHeight > static_cast<quint32>(metadata.height))
+            {
+                setCorrupted(metadata, "Некорректная геометрия Image Descriptor GIF");
+                return false;
+            }
+
             const unsigned char imagePacked = static_cast<unsigned char>(descriptor[8]);
             if ((imagePacked & 0x80) != 0)
             {
@@ -928,6 +962,11 @@ bool parseGif(QFile& file, ImageMetadata& metadata)
                 return false;
             }
             lzwMinimum = static_cast<unsigned char>(lzw);
+            if (lzwMinimum < 2 || lzwMinimum > 8)
+            {
+                setCorrupted(metadata, "Некорректный LZW minimum code size GIF");
+                return false;
+            }
             if (!skipGifSubBlocks(file))
             {
                 setCorrupted(metadata, "Обрезаны LZW-данные GIF");
@@ -1342,14 +1381,15 @@ bool parsePcx(QFile& file, ImageMetadata& metadata)
 
     if (encoding == 0)
     {
-        const quint64 required = 128ULL + static_cast<quint64>(bytesPerLine) * planes * metadata.height;
+        const quint64 required = 128ULL + static_cast<quint64>(bytesPerLine) *
+            static_cast<quint64>(planes) * static_cast<quint64>(metadata.height);
         if (required > static_cast<quint64>(file.size()))
         {
             setCorrupted(metadata, "PCX обрезан относительно BytesPerLine");
             return false;
         }
     }
-    else if (file.size() == 128)
+    else if (file.size() <= 128)
     {
         setCorrupted(metadata, "В PCX отсутствуют RLE-данные");
         return false;
@@ -1404,6 +1444,9 @@ ImageMetadata ImageParser::parseFile(const QString& filePath)
     else if (detected == "GIF") parsed = parseGif(file, metadata);
     else if (detected == "TIFF") parsed = parseTiff(file, metadata);
     else if (detected == "PCX") parsed = parsePcx(file, metadata);
+
+    if (parsed)
+        applyWindowsDefaults(metadata);
 
     if (parsed && !expected.isEmpty() && expected != detected)
         setWarning(metadata, QString("Расширение .%1 не соответствует сигнатуре %2").arg(info.suffix(), detected));

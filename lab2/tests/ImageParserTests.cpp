@@ -247,6 +247,9 @@ private slots:
         QCOMPARE(gif.width, 1);
         QCOMPARE(gif.height, 1);
         QVERIFY(gif.compression.contains("LZW"));
+        QCOMPARE(qRound(gif.dpiX), 96);
+        QCOMPARE(qRound(gif.dpiY), 96);
+        QVERIFY(gif.windowsDefaultDpi);
 
         const ImageMetadata pcx = ImageParser::parseFile(dir.filePath("sample.pcx"));
         QCOMPARE(static_cast<int>(pcx.state), static_cast<int>(MetadataState::Ok));
@@ -272,8 +275,12 @@ private slots:
         writeFile(dir.filePath("renamed.jpg"), makePng());
         writeFile(dir.filePath("text.jpg"), QByteArray("not an image"));
 
-        QCOMPARE(static_cast<int>(ImageParser::parseFile(dir.filePath("broken.png")).state), static_cast<int>(MetadataState::Corrupted));
-        QCOMPARE(static_cast<int>(ImageParser::parseFile(dir.filePath("broken.jpg")).state), static_cast<int>(MetadataState::Corrupted));
+        const ImageMetadata brokenPng = ImageParser::parseFile(dir.filePath("broken.png"));
+        const ImageMetadata brokenJpeg = ImageParser::parseFile(dir.filePath("broken.jpg"));
+        QCOMPARE(static_cast<int>(brokenPng.state), static_cast<int>(MetadataState::Corrupted));
+        QCOMPARE(static_cast<int>(brokenJpeg.state), static_cast<int>(MetadataState::Corrupted));
+        QVERIFY(!brokenPng.windowsDefaultDpi);
+        QVERIFY(!brokenJpeg.windowsDefaultDpi);
 
         const ImageMetadata renamed = ImageParser::parseFile(dir.filePath("renamed.jpg"));
         QCOMPARE(static_cast<int>(renamed.state), static_cast<int>(MetadataState::Warning));

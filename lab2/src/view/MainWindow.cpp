@@ -10,8 +10,6 @@
 #include <QFrame>
 #include <QHeaderView>
 #include <QHBoxLayout>
-#include <QImage>
-#include <QImageReader>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
@@ -73,10 +71,15 @@ QString selectedSummary(const ImageMetadata& metadata)
     if (metadata.width > 0 && metadata.height > 0)
         lines << QString("Размер: %1 x %2 px").arg(metadata.width).arg(metadata.height);
     if (metadata.dpiX > 0.0 && metadata.dpiY > 0.0)
-        lines << QString("Разрешение: %1 x %2 dpi")
+    {
+        QString resolution = QString("Разрешение: %1 x %2 dpi")
             .arg(metadata.dpiX, 0, 'f', 2).arg(metadata.dpiY, 0, 'f', 2);
+        if (metadata.windowsDefaultDpi)
+            resolution += " (Windows по умолчанию)";
+        lines << resolution;
+    }
     else
-        lines << "Разрешение: не задано в файле";
+        lines << "Разрешение: -";
     lines << QString("Глубина цвета: %1")
         .arg(metadata.colorDepthText.isEmpty() ? QString("-") : metadata.colorDepthText);
     lines << QString("Сжатие: %1").arg(metadata.compression.isEmpty() ? QString("-") : metadata.compression);
@@ -464,14 +467,8 @@ void MainWindow::showMetadata(const QModelIndex& current)
         return;
     }
 
-    QImageReader reader(metadata->filePath);
-    reader.setAutoTransform(true);
-    QSize target(metadata->width, metadata->height);
-    target.scale(QSize(300, 260), Qt::KeepAspectRatio);
-    if (target.isValid())
-        reader.setScaledSize(target);
-    const QImage image = reader.read();
-    if (image.isNull())
+    QPixmap pixmap(metadata->filePath);
+    if (pixmap.isNull())
     {
         previewLabel_->setPixmap(QPixmap());
         previewLabel_->setText("Qt не может отобразить этот формат");
@@ -479,7 +476,7 @@ void MainWindow::showMetadata(const QModelIndex& current)
     }
 
     previewLabel_->setText(QString());
-    previewLabel_->setPixmap(QPixmap::fromImage(image));
+    previewLabel_->setPixmap(pixmap.scaled(300, 260, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 }
 
 void MainWindow::clearPreview()

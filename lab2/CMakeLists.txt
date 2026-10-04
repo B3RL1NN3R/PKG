@@ -117,7 +117,7 @@ endif()
 endif()
 
 install(FILES README.md DESTINATION .)
-install(FILES docs/Lab2_Report.docx DESTINATION docs OPTIONAL)
+install(FILES docs/Lab2_Report.docx docs/RequirementsCompliance.md DESTINATION docs OPTIONAL)
 
 set(CPACK_GENERATOR ZIP)
 set(CPACK_PACKAGE_NAME "ImageMetadataReader")

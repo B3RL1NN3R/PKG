@@ -20,6 +20,7 @@ struct ImageMetadata
     int height{};
     double dpiX{};
     double dpiY{};
+    bool windowsDefaultDpi{};
     int colorDepth{};
     QString colorDepthText;
     QString compression;

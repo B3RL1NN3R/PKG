@@ -137,7 +137,10 @@ QString ImageTableModel::resolutionText(const ImageMetadata& metadata) const
     if (metadata.dpiX <= 0.0 || metadata.dpiY <= 0.0)
         return "-";
 
-    return QString("%1 x %2")
+    QString value = QString("%1 x %2")
         .arg(metadata.dpiX, 0, 'f', 2)
         .arg(metadata.dpiY, 0, 'f', 2);
+    if (metadata.windowsDefaultDpi)
+        value += " (Windows)";
+    return value;
 }
