@@ -1,6 +1,6 @@
 # ImageProcessor
 
-Qt desktop application for low-frequency filtering and morphological image processing.
+Desktop application for low-frequency filtering and morphological image processing.
 
 ## Download              
 Windows version:
