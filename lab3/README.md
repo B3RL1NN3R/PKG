@@ -4,6 +4,7 @@ Qt desktop application for low-frequency filtering and morphological image proce
 
 ## Download              
 Windows version:
+
 [Download ImageProcessor v1.0.0](https://github.com/B3RL1NN3R/PKG/releases/tag/ImageProcessor)
               
 ## Features              
