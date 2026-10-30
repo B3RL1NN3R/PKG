@@ -1,10 +1,16 @@
 #include "ImageBuffer.h"
 #include <algorithm>
 #include <QColor>
+#include <limits>
 
 ImageBuffer::ImageBuffer(int width, int height, int channels)
-    : m_width(width), m_height(height), m_channels(channels > 0 ? channels : 3)
+    : m_width(width), m_height(height), m_channels(channels == 1 ? 1 : 3)
 {
+    if (width <= 0 || height <= 0 || m_channels <= 0 ||
+        static_cast<qint64>(width) * height * m_channels > std::numeric_limits<int>::max()) {
+        m_width = m_height = 0;
+        return;
+    }
     m_data.resize(width * height * m_channels);
     m_data.fill(0);
 }
@@ -15,6 +21,11 @@ ImageBuffer::ImageBuffer(const QImage& img)
     m_width = converted.width();
     m_height = converted.height();
     m_channels = 3;
+    if (m_width <= 0 || m_height <= 0 ||
+        static_cast<qint64>(m_width) * m_height * 3 > std::numeric_limits<int>::max()) {
+        m_width = m_height = 0;
+        return;
+    }
     m_data.resize(m_width * m_height * 3);
 
     for (int y = 0; y < m_height; ++y) {
@@ -55,12 +66,14 @@ void ImageBuffer::set(int x, int y, int c, uint8_t value) {
 }
 
 QImage ImageBuffer::toQImage() const {
+    if (m_width <= 0 || m_height <= 0 || m_data.isEmpty()) return QImage();
     QImage img(m_width, m_height, QImage::Format_RGB32);
     for (int y = 0; y < m_height; ++y) {
         QRgb* dst = reinterpret_cast<QRgb*>(img.scanLine(y));
-        const uint8_t* src = reinterpret_cast<const uint8_t*>(m_data.constData()) + y * m_width * 3;
+        const uint8_t* src = reinterpret_cast<const uint8_t*>(m_data.constData()) + y * m_width * m_channels;
         for (int x = 0; x < m_width; ++x) {
-            dst[x] = qRgb(src[x * 3], src[x * 3 + 1], src[x * 3 + 2]);
+            if (m_channels == 1) dst[x] = qRgb(src[x], src[x], src[x]);
+            else dst[x] = qRgb(src[x * m_channels], src[x * m_channels + 1], src[x * m_channels + 2]);
         }
     }
     return img;

@@ -12,6 +12,70 @@
 #include <QThread>
 #include <QTimer>
 #include <QFileInfo>
+#include <QCloseEvent>
+#include <QKeyEvent>
+#include <QShortcut>
+#include <QKeySequence>
+#include <array>
+#include <algorithm>
+#include <cstdint>
+
+
+namespace {
+
+// Contrast-stretched display image for difference-based morphology previews.
+// The processing buffer itself is never modified; Save exports the raw values.
+QImage makeDifferencePreview(const ImageBuffer& buffer)
+{
+    QImage image = buffer.toQImage();
+    if (image.isNull()) return image;
+
+    const uint8_t* data = buffer.data();
+    const int channels = buffer.channels();
+    const qint64 sampleCount = static_cast<qint64>(buffer.width())
+                             * buffer.height() * channels;
+    if (!data || sampleCount <= 0) return image;
+
+    std::array<quint64, 256> histogram{};
+    for (qint64 i = 0; i < sampleCount; ++i)
+        ++histogram[data[i]];
+
+    const quint64 lowTarget = static_cast<quint64>((sampleCount - 1) * 0.01);
+    const quint64 highTarget = static_cast<quint64>((sampleCount - 1) * 0.99);
+    quint64 cumulative = 0;
+    int low = 0;
+    int high = 255;
+    bool lowFound = false;
+    for (int value = 0; value < 256; ++value) {
+        cumulative += histogram[static_cast<size_t>(value)];
+        if (!lowFound && cumulative > lowTarget) {
+            low = value;
+            lowFound = true;
+        }
+        if (cumulative > highTarget) {
+            high = value;
+            break;
+        }
+    }
+
+    if (high <= low) return image;
+    const int range = high - low;
+    for (int y = 0; y < image.height(); ++y) {
+        QRgb* row = reinterpret_cast<QRgb*>(image.scanLine(y));
+        for (int x = 0; x < image.width(); ++x) {
+            const QRgb pixel = row[x];
+            const auto stretch = [low, range](int value) {
+                return qBound(0, ((value - low) * 255 + range / 2) / range, 255);
+            };
+            row[x] = qRgb(stretch(qRed(pixel)),
+                          stretch(qGreen(pixel)),
+                          stretch(qBlue(pixel)));
+        }
+    }
+    return image;
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 {
@@ -24,7 +88,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     rootLayout->setSpacing(0);
 
     // === ЛЕВАЯ ЧАСТЬ: Панель управления ===
-    auto* controlPanel = new QWidget(this);
+    m_controlPanel = new QWidget(this);
+    auto* controlPanel = m_controlPanel;
     controlPanel->setMinimumWidth(320);
     controlPanel->setMaximumWidth(380);
     controlPanel->setStyleSheet("background: #f5f5f5; border-right: 1px solid #ddd;");
@@ -83,6 +148,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         "    background-color: white; color: #2c3e50; "
         "    selection-background-color: #3498db; selection-color: white; "
         "    border: 1px solid #bdc3c7; outline: none; "
+        "} "
+        "QComboBox QAbstractItemView::item { "
+        "    background-color: white; color: #2c3e50; "
+        "    min-height: 24px; padding: 4px 8px; "
+        "} "
+        "QComboBox QAbstractItemView::item:hover, "
+        "QComboBox QAbstractItemView::item:selected { "
+        "    background-color: #3498db; color: white; "
         "}"
         );
     paramsLayout->addWidget(m_cbMethod);
@@ -128,7 +201,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     paramsLayout->addWidget(new QLabel("Радиус ядра / структурирующего элемента:", this));
     auto* radiusRow = new QHBoxLayout();
     m_sliderRadius = new QSlider(Qt::Horizontal, this);
-    m_sliderRadius->setRange(1, 15);
+    m_sliderRadius->setRange(1, 30);
     m_sliderRadius->setValue(2);
     m_sliderRadius->setEnabled(true);
     m_lblRadiusValue = new QLabel("2", this);
@@ -138,6 +211,55 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     radiusRow->addWidget(m_sliderRadius);
     radiusRow->addWidget(m_lblRadiusValue);
     paramsLayout->addLayout(radiusRow);
+
+    paramsLayout->addWidget(new QLabel("Форма структурирующего элемента:", this));
+    m_cbStructuringElement = new QComboBox(this);
+    m_cbStructuringElement->addItems({
+        "Rectangle (прямоугольник)",
+        "Ellipse (эллипс)",
+        "Cross (крест)"
+    });
+    m_cbStructuringElement->setMinimumHeight(32);
+    m_cbStructuringElement->setEnabled(true);
+    // Keep the structural-element combo visually identical to the method combo.
+    // Explicit item-view and hover colors prevent text becoming unreadable on hover.
+    m_cbStructuringElement->setStyleSheet(
+        "QComboBox { "
+        "    background-color: white; "
+        "    color: #2c3e50; "
+        "    border: 1px solid #bdc3c7; "
+        "    border-radius: 4px; "
+        "    padding: 4px 8px; "
+        "    font-weight: bold; "
+        "} "
+        "QComboBox:hover { border-color: #3498db; } "
+        "QComboBox:focus { border-color: #2980b9; } "
+        "QComboBox:disabled { background-color: #ecf0f1; color: #7f8c8d; } "
+        "QComboBox::drop-down { border: none; background: transparent; } "
+        "QComboBox QAbstractItemView { "
+        "    background-color: white; "
+        "    color: #2c3e50; "
+        "    selection-background-color: #3498db; "
+        "    selection-color: white; "
+        "    border: 1px solid #bdc3c7; "
+        "    outline: none; "
+        "} "
+        "QComboBox QAbstractItemView::item { "
+        "    background-color: white; "
+        "    color: #2c3e50; "
+        "    min-height: 24px; "
+        "    padding: 4px 8px; "
+        "} "
+        "QComboBox QAbstractItemView::item:hover, "
+        "QComboBox QAbstractItemView::item:selected { "
+        "    background-color: #3498db; "
+        "    color: white; "
+        "}"
+        );
+    m_cbStructuringElement->setToolTip(
+        "Форма используется методами Erosion, Dilation, Gradient, Top-Hat и Black-Hat. "
+        "Для Box и Gaussian Filter она не влияет на результат.");
+    paramsLayout->addWidget(m_cbStructuringElement);
 
     controlLayout->addWidget(groupParams);
 
@@ -224,11 +346,58 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
     connect(m_sliderRadius, &QSlider::valueChanged, this, &MainWindow::onRadiusChanged);
     connect(m_cbMethod, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onMethodChanged);
+    connect(m_cbStructuringElement, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) {
+                if (m_source && !m_watcher.isRunning()) {
+                    m_btnSave->setEnabled(false);
+                    m_lblStatus->setText("Форма элемента изменена — нажмите «Применить»");
+                }
+            });
     connect(&m_watcher, &QFutureWatcher<ImageBuffer>::finished,
             this, &MainWindow::onProcessingFinished);
 
+    auto* cancelShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    connect(cancelShortcut, &QShortcut::activated, this, [this]() {
+        if (m_isProcessing && !m_isClosing && m_cancelToken) {
+            m_cancelToken->store(true, std::memory_order_relaxed);
+            m_lblStatus->setText("Отмена обработки... Пожалуйста, подождите");
+        }
+    });
+
     onEdgeModeChanged(0);
     onMethodChanged(0);
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    // Stop accepting work before asking every active processing stage to exit.
+    m_isClosing = true;
+    if (m_cancelToken) m_cancelToken->store(true, std::memory_order_relaxed);
+    disconnect(&m_watcher, nullptr, this, nullptr);
+    if (m_watcher.isRunning()) m_watcher.waitForFinished();
+    event->accept();
+}
+
+void MainWindow::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Escape && m_isProcessing && !m_isClosing) {
+        if (m_cancelToken) m_cancelToken->store(true, std::memory_order_relaxed);
+        m_lblStatus->setText("Отмена обработки... Пожалуйста, подождите");
+        event->accept();
+        return;
+    }
+    QMainWindow::keyPressEvent(event);
+}
+
+void MainWindow::setProcessingUiLocked(bool locked) {
+    if (m_controlPanel) m_controlPanel->setEnabled(!locked);
+    if (!locked) {
+        m_btnLoad->setEnabled(true);
+        m_cbMethod->setEnabled(true);
+        m_cbEdge->setEnabled(true);
+        m_sliderRadius->setEnabled(true);
+        m_cbStructuringElement->setEnabled(true);
+        m_btnApply->setEnabled(m_source != nullptr);
+        m_btnSave->setEnabled(m_resultBuffer.width() > 0 && m_resultBuffer.height() > 0);
+    }
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event) {
@@ -269,24 +438,20 @@ int MainWindow::getOptimalRadius(int method) const {
 }
 
 int MainWindow::getMaxRecommendedRadius(int method) const {
-    switch (method) {
-    case 0: return 7;  // Box Filter
-    case 1: return 8;  // Gaussian Filter
-    case 2: return 4;  // Erosion
-    case 3: return 4;  // Dilation
-    case 4: return 3;  // Morphological Gradient
-    case 5: return 4;  // Top-Hat
-    case 6: return 4;  // Black-Hat
-    default: return 5;
-    }
+    Q_UNUSED(method);
+    // Expanded range; the optimized rectangular morphology path remains O(N).
+    return 30;
 }
 
 void MainWindow::onMethodChanged(int index) {
     int optimal = getOptimalRadius(index);
     int maxRec = getMaxRecommendedRadius(index);
 
-    m_sliderRadius->setValue(optimal);
     m_sliderRadius->setMaximum(maxRec);
+    m_sliderRadius->setValue(optimal);
+    // Разрешаем выбрать форму сразу после загрузки изображения, независимо
+    // от текущего фильтра: пользователь может выбрать форму заранее.
+    m_cbStructuringElement->setEnabled(true);
 
     QString methodNames[] = {
         "Box Filter", "Gaussian Filter", "Erosion", "Dilation",
@@ -300,8 +465,8 @@ void MainWindow::onMethodChanged(int index) {
 bool MainWindow::validateParameters() {
     int radius = m_sliderRadius->value();
 
-    if (radius < 1 || radius > 15) {
-        showWarning("Радиус должен быть в диапазоне от 1 до 15");
+    if (radius < 1 || radius > 30) {
+        showWarning("Радиус должен быть в диапазоне от 1 до 30");
         return false;
     }
 
@@ -325,7 +490,8 @@ void MainWindow::onRadiusChanged(int value) {
 }
 
 void MainWindow::onLoadImage() {
-    if (m_watcher.isRunning()) {
+    if (m_isClosing) return;
+    if (m_isProcessing || m_watcher.isRunning()) {
         showWarning("Дождитесь завершения текущей обработки");
         return;
     }
@@ -348,8 +514,11 @@ void MainWindow::onLoadImage() {
         "QLabel { background: transparent; border: 1px solid #bdc3c7; border-radius: 4px; }");
 
     m_btnApply->setEnabled(true);
+    // All four processing parameters remain editable independently of image state.
+    m_cbStructuringElement->setEnabled(true);
 
     m_btnSave->setEnabled(false);
+    m_resultBuffer = ImageBuffer();
     m_resultPixmap = QPixmap();
     m_lblResult->setText("Настройте параметры и нажмите «Применить»");
     m_lblResult->setStyleSheet(
@@ -359,6 +528,7 @@ void MainWindow::onLoadImage() {
 }
 
 void MainWindow::onApply() {
+    if (m_isClosing || m_isProcessing) return;
     if (!m_source) {
         showWarning("Сначала загрузите изображение");
         return;
@@ -369,11 +539,9 @@ void MainWindow::onApply() {
         return;
     }
 
-    m_btnLoad->setEnabled(false);
-    m_cbMethod->setEnabled(false);
-    m_cbEdge->setEnabled(false);
-    m_sliderRadius->setEnabled(false);
-    m_btnApply->setEnabled(false);
+    m_isProcessing = true;
+    m_cancelToken = std::make_shared<std::atomic_bool>(false);
+    setProcessingUiLocked(true);
     m_btnApply->setText("⏳ Обработка...");
 
     m_lblResult->setText("Обработка...");
@@ -381,7 +549,7 @@ void MainWindow::onApply() {
 
     m_progressBar->setVisible(true);
     m_progressBar->setValue(0);
-    m_lblStatus->setText("Начало обработки...");
+    m_lblStatus->setText("Обработка... (Esc — отмена)");
 
     runProcessing();
 }
@@ -391,58 +559,81 @@ void MainWindow::runProcessing() {
     int method = m_cbMethod->currentIndex();
     int edge = m_cbEdge->currentIndex();
     int radius = m_sliderRadius->value();
+    const int shapeIndex = m_cbStructuringElement->currentIndex();
+    const StructuringElement shape = shapeIndex == 1 ? StructuringElement::Ellipse
+        : (shapeIndex == 2 ? StructuringElement::Cross : StructuringElement::Rectangle);
     EdgeMode mode = (edge == 0) ? EdgeMode::Clamp : EdgeMode::Reflect;
 
-    auto future = QtConcurrent::run([=]() -> ImageBuffer {
+    const auto cancellation = m_cancelToken;
+    auto future = QtConcurrent::run([srcCopy, method, radius, mode, shape, cancellation]() -> ImageBuffer {
+        if (isCancellationRequested(cancellation)) return ImageBuffer();
         switch (method) {
-        case 0: return Filters::boxFilter(srcCopy, radius, mode);
-        case 1: return Filters::gaussianFilter(srcCopy, radius, mode);
-        case 2: return Morphology::apply(srcCopy, MorphOp::Erosion, radius, mode);
-        case 3: return Morphology::apply(srcCopy, MorphOp::Dilation, radius, mode);
-        case 4: return Morphology::apply(srcCopy, MorphOp::Gradient, radius, mode);
-        case 5: return Morphology::apply(srcCopy, MorphOp::TopHat, radius, mode);
-        case 6: return Morphology::apply(srcCopy, MorphOp::BlackHat, radius, mode);
+        case 0: return Filters::boxFilter(srcCopy, radius, mode, cancellation);
+        case 1: return Filters::gaussianFilter(srcCopy, radius, mode, cancellation);
+        case 2: return Morphology::apply(srcCopy, MorphOp::Erosion, radius, mode, shape, cancellation);
+        case 3: return Morphology::apply(srcCopy, MorphOp::Dilation, radius, mode, shape, cancellation);
+        case 4: return Morphology::apply(srcCopy, MorphOp::Gradient, radius, mode, shape, cancellation);
+        case 5: return Morphology::apply(srcCopy, MorphOp::TopHat, radius, mode, shape, cancellation);
+        case 6: return Morphology::apply(srcCopy, MorphOp::BlackHat, radius, mode, shape, cancellation);
         }
-        return srcCopy;
+        return isCancellationRequested(cancellation) ? ImageBuffer() : srcCopy;
     });
     m_watcher.setFuture(future);
 }
 
 void MainWindow::onProcessingFinished() {
-    m_btnLoad->setEnabled(true);
-    m_cbMethod->setEnabled(true);
-    m_cbEdge->setEnabled(true);
-    m_sliderRadius->setEnabled(true);
-    m_btnApply->setEnabled(true);
+    if (m_isClosing) return;
+
+    m_isProcessing = false;
+    const bool cancelled = isCancellationRequested(m_cancelToken);
+    m_resultBuffer = cancelled ? ImageBuffer() : m_watcher.result();
+    m_cancelToken.reset();
+    setProcessingUiLocked(false);
     m_btnApply->setText("▶ Применить");
+    m_progressBar->setValue(cancelled ? 0 : 100);
 
-    m_progressBar->setValue(100);
-    m_lblStatus->setText("Обработка завершена");
+    if (cancelled || m_resultBuffer.width() <= 0 || m_resultBuffer.height() <= 0) {
+        m_resultPixmap = QPixmap();
+        m_lblResult->setPixmap(QPixmap());
+        m_lblResult->setText("Обработка отменена. Можно изменить параметры и повторить.");
+        m_btnSave->setEnabled(false);
+        m_lblStatus->setText("Обработка отменена");
+    } else {
+        const int method = m_cbMethod->currentIndex();
+        const bool differenceMethod = (method == 5 || method == 6);
+        const QImage preview = differenceMethod
+            ? makeDifferencePreview(m_resultBuffer)
+            : m_resultBuffer.toQImage();
+        m_resultPixmap = QPixmap::fromImage(preview);
 
-    ImageBuffer result = m_watcher.result();
-    m_resultPixmap = QPixmap::fromImage(result.toQImage());
+        m_lblResult->setText("");
+        m_lblResult->setStyleSheet(
+            "QLabel { background: transparent; border: 1px solid #bdc3c7; border-radius: 4px; }");
+        m_btnSave->setEnabled(true);
+        m_lblStatus->setText(differenceMethod
+            ? "Готово. Контраст предпросмотра усилен; сохраняются исходные значения Top-Hat/Black-Hat."
+            : "Обработка завершена");
+        rescaleImages();
+    }
 
-    m_lblResult->setText("");
-    m_lblResult->setStyleSheet(
-        "QLabel { background: transparent; border: 1px solid #bdc3c7; border-radius: 4px; }");
-    m_btnSave->setEnabled(true);
-
-    rescaleImages();
-
-    QTimer::singleShot(2000, [this]() {
-        m_progressBar->setVisible(false);
-        m_lblStatus->setText("Готов к работе");
+    QTimer::singleShot(2000, this, [this]() {
+        if (!m_isProcessing && !m_isClosing) {
+            m_progressBar->setVisible(false);
+            if (m_lblStatus->text() == "Обработка завершена")
+                m_lblStatus->setText("Готов к работе");
+        }
     });
 }
 
 void MainWindow::onSave() {
-    if (m_resultPixmap.isNull()) return;
+    if (m_isClosing || m_isProcessing || m_resultPixmap.isNull()) return;
 
     QString path = QFileDialog::getSaveFileName(this, "Сохранить результат", QString(),
                                                 "PNG (*.png);;JPEG (*.jpg *.jpeg);;BMP (*.bmp)");
     if (path.isEmpty()) return;
 
-    if (!m_resultPixmap.toImage().save(path)) {
+    const QImage exportImage = m_resultBuffer.toQImage();
+    if (exportImage.isNull() || !exportImage.save(path)) {
         showWarning("Не удалось сохранить изображение. Проверьте путь и права доступа.");
     }
 }
